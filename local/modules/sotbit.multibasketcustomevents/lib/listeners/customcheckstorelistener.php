@@ -62,24 +62,35 @@ class CustomCheckStoreListener
             return;
         }
 
+        return self::checkProductsStore($basketItem);
+
+    }
+
+    private static function checkProductsStore(BasketItem $basketItem)
+    {
         $fuser = new Fuser;
         $mBasketTable = new MBasketTable;
         $mBasketItemTable = new MBasketItemTable;
         $mBasketItemPropsTable = new MBasketItemPropsTable;
+
+        $standardWarehouseId = self::getStandardWarehouse($basketItem->getField('PRODUCT_ID'));
+
+        if (self::$checkStandardWarehouse && $standardWarehouseId) {
+            self::changeCurrentBasket(self::getStandardWarehouse($basketItem->getField('PRODUCT_ID')));
+        }
+
         $mBasket = MBasket::getCurrent(
             $fuser,
             $mBasketTable,
             $mBasketItemTable,
             $mBasketItemPropsTable,
-            $context
+            Context::getCurrent()
         );
 
-        return self::checkProductsStore($basketItem, $mBasket->getStoreId());
+        $storeId = (self::$checkStandardWarehouse)
+            ? $standardWarehouseId
+            : $mBasket->getStoreId();
 
-    }
-
-    private static function checkProductsStore(BasketItem $basketItem, int $storeId)
-    {
         if (!$basketItem->canBuy()) {
             return;
         }
@@ -92,9 +103,9 @@ class CustomCheckStoreListener
         $storeAmount = self::getStoreAmount($productId, $storeId);
 
         if ((int)$storeAmount === 0) {
-            if (self::$checkStandardWarehouse === false) {
+            if (!self::$checkStandardWarehouse) {
                 self::$checkStandardWarehouse = true;
-                return self::checkProductsStore($basketItem, self::getStandardWarehouse($basketItem->getField('PRODUCT_ID')));
+                return self::checkProductsStore($basketItem);
             } else {
                 return new \Bitrix\Main\EventResult(\Bitrix\Main\EventResult::ERROR,
                     new \Bitrix\Sale\ResultError(Loc::getMessage('SOTBIT_MULTIBASKET_ERROR_CHECK_QUANTITY')));
@@ -194,7 +205,7 @@ class CustomCheckStoreListener
         return self::$amountCache[$productId] ?: null;
     }
 
-    public static function getStandardWarehouse($productId): int
+    public static function getStandardWarehouse(int $productId): int
     {
         $StandardWarehouseValue = ElementPropertyTable::getList([
             'select' => ['VALUE'],
@@ -214,5 +225,33 @@ class CustomCheckStoreListener
         ])->fetch()['VALUE'];
 
         return (int)$StandardWarehouseValue;
+    }
+
+    public static function changeCurrentBasket(int $storeId) : bool
+    {
+        $fuserId = Fuser::getId();
+
+        $baskets = MBasketTable::getList([
+            'select' => ['ID'],
+            'filter' => [
+                '=FUSER_ID' => $fuserId,
+                '=CURRENT_BASKET' => 1
+            ]
+        ]);
+
+        while ($basket = $baskets->fetch()) {
+            MBasketTable::update($basket['ID'], ['CURRENT_BASKET' => 0]);
+        }
+
+        $basketId = MBasketTable::getList([
+            'select' => ['ID'],
+            'filter' => ['=FUSER_ID' => $fuserId, '=STORE_ID' => $storeId],
+        ])->fetch()['ID'];
+
+        $result = MBasketTable::update($basketId, [
+            'CURRENT_BASKET' => 1,
+        ]);
+
+        return $result->isSuccess();
     }
 }
